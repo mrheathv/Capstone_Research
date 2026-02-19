@@ -8,15 +8,16 @@ def get_openai_client():
     """Initialize and return an OpenAI client"""
     return OpenAI()
 
-def agent_answer(user_question: str, max_iterations: int = 5) -> str:
+def agent_answer(user_question: str, max_iterations: int = 5, current_user: str = None) -> str:
     """
     Agent that uses ReAct pattern to answer questions with multiple tools.
-    
+
     Args:
         user_question: The user's natural language question
-        tools_registry: Dictionary of available tools {name: Tool}
         max_iterations: Maximum number of reasoning loops (safety limit)
-        
+        current_user: Optional override for the current sales agent name.
+                      Falls back to st.session_state['current_user'] if not provided.
+
     Returns:
         Final synthesized answer as a string
     """
@@ -25,22 +26,35 @@ def agent_answer(user_question: str, max_iterations: int = 5) -> str:
     # Convert tools to OpenAI format
     tools_for_openai = get_tools_for_openai()
 
-    current_user = st.session_state.get('current_user', 'Unknown')
+    if current_user is None:
+        current_user = st.session_state.get('current_user', 'Unknown')
 
     system_message = f"""You are a helpful sales assistant with access to a CRM database.
 
     Current User: {current_user}
 
-    You have multiple tools available:
-    - text_to_sql: For flexible, ad-hoc queries about any data in the database
-    - open_work: For quickly getting outstanding work items (automatically filtered for current user)
+    You have three tools available:
+    - recommend_contacts: Use this when the user asks who to contact, wants contact recommendations,
+      or has free time and wants to know who to reach out to. This tool scores accounts by
+      propensity to buy, revenue, and days since last contact.
+    - text_to_sql: For flexible, ad-hoc queries about any data in the database. Use this when
+      the user asks for summaries, history, deal details, or any specific data lookup.
+    - open_work: For quickly getting outstanding work items, follow-ups, meetings, or open
+      engagements. Automatically filtered for the current user.
 
-    IMPORTANT: For questions asking about multiple things (like "open work AND deals closing soon"):
-    1. Call open_work first
-    2. Then call text_to_sql for the additional information
-    3. After gathering all information, provide a synthesized, prioritized answer combining both results
+    ROUTING RULES — follow these precisely:
+    1. "Availability / who to contact / recommendations" → call recommend_contacts first.
+    2. "Summary of interactions with [account name]" → call text_to_sql with a query that
+       retrieves interaction history for that specific account.
+    3. "Follow-up / open tasks / meetings / open engagements" → call open_work first.
+    4. For multi-part questions: gather all needed information, then synthesize a single answer.
 
-    Do NOT just return raw tool output - always provide a final synthesized answer after gathering information.
+    GUARDRAILS:
+    - Only read data — never suggest or attempt to write, update, or delete records.
+    - If a question is outside the scope of the CRM database, politely say so.
+
+    Do NOT just return raw tool output — always provide a clear, concise, synthesized answer
+    after gathering information. Format the answer in plain markdown for readability.
     """
     
     messages = [

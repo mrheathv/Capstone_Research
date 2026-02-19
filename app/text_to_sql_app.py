@@ -1,6 +1,15 @@
 import sys
 from pathlib import Path
+
+# Allow running from project root: streamlit run app/text_to_sql_app.py
 sys.path.append(str(Path(__file__).parent))
+
+# Load .env file if present (OPENAI_API_KEY, etc.)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass  # python-dotenv not installed; rely on environment variables
 
 import streamlit as st
 from agent import (
@@ -10,6 +19,7 @@ from agent import (
     Tool,
     register_tool
 )
+from agent.recommend import recommend_contacts_handler
 from database import db_query
 
 
@@ -57,6 +67,31 @@ register_tool(Tool(
         }
     },
     handler=open_work_handler
+))
+
+# Register the recommend_contacts tool
+register_tool(Tool(
+    name="recommend_contacts",
+    description=(
+        "Recommend which accounts to contact next using a scoring model. "
+        "Scores each account on propensity to buy (40%), revenue (20%), and days since last "
+        "contact (40%). Use this for questions like 'who should I call?', 'I have free time, "
+        "who should I reach out to?', or 'give me 3 contact recommendations'."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "n": {
+                "type": "integer",
+                "description": "Number of recommendations to return (default: 3)"
+            },
+            "sector": {
+                "type": "string",
+                "description": "Optional: filter recommendations to a specific industry sector"
+            }
+        }
+    },
+    handler=recommend_contacts_handler
 ))
 
 
