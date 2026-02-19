@@ -1,0 +1,19 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# Evaluation results (generated output)
+eval/results_*.json
+
+# Editor / OS
+.DS_Store
+*.swp
