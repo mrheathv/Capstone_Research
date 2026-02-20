@@ -185,6 +185,7 @@ def run_evaluation(
     golden_path: str = None,
     default_agent: str = "Anna Snelling",
     category_filter: str = None,
+    progress_callback=None,
 ) -> list:
     if golden_path is None:
         golden_path = str(Path(__file__).parent / "golden_set.json")
@@ -245,6 +246,9 @@ def run_evaluation(
             "scores": scores,
             "average_score": round(avg, 2),
         })
+
+        if progress_callback is not None:
+            progress_callback(i, len(test_cases))
 
     return results
 
