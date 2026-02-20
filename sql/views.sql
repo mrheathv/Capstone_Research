@@ -49,9 +49,9 @@ QUALIFY ROW_NUMBER() OVER (
 
 
 
--- Convenience: just items due today
+-- Convenience: items whose most recent interaction was today
 CREATE OR REPLACE VIEW v_open_today AS
-SELECT * FROM v_open_work WHERE due_date = CURRENT_DATE;
+SELECT * FROM v_open_work WHERE d_interaction = CURRENT_DATE;
 
 -- 4) Pipeline snapshot (aligned to your columns)
 --    Use deal_stage and derive a simple deal_status from close_date.

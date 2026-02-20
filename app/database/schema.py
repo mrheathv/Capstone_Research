@@ -77,13 +77,20 @@ def get_business_context() -> str:
     IMPORTANT VIEWS (use these for common queries):
     - v_open_work: Outstanding work items (deals in 'Engaging' stage from last 30 days)
     - v_pipeline_snapshot: Current state of all deals
-    - v_accounts_summary: Account overview with last touch date
-    - v_interactions_norm: Normalized interaction history
+    - v_accounts_summary: Account overview with last touch date and has_open_work flag
+    - v_interactions_norm: Normalized interaction history with typed timestamps
+    - v_last_touch: Most recent interaction date per account
 
     BUSINESS RULES:
     - Deal stages: Prospecting → Engaging → Won/Lost
     - "Outstanding items" or "open work" = deals in 'Engaging' stage
     - "Last touch" = most recent interaction date with an account
+    - accounts.propensity_to_buy is a 0.0–1.0 score indicating purchase likelihood
+    - accounts.revenue is in millions USD
+
+    CONTACT RECOMMENDATION SCORING (for ad-hoc recommendation queries):
+    Score = (propensity_to_buy * 40) + (revenue / max_revenue * 20) + (days_since_contact / 90 * 40)
+    Higher score = higher priority to contact. Cap days_since_contact at 90 for scoring.
 
 EXAMPLE QUERIES:
 
@@ -97,13 +104,21 @@ Q: "Show me engaging stage deals"
 A: SELECT * FROM v_pipeline_snapshot WHERE deal_stage = 'Engaging';
 
 Q: "Which accounts does a sales agent work with?"
-A: SELECT DISTINCT a.account_id, a.account, sp.sales_agent 
-   FROM accounts a 
-   JOIN sales_pipeline sp ON a.account_id = sp.account_id 
+A: SELECT DISTINCT a.account_id, a.account, sp.sales_agent
+   FROM accounts a
+   JOIN sales_pipeline sp ON a.account_id = sp.account_id
    WHERE sp.sales_agent = 'Sales Agent Name';
 
 Q: "Which accounts haven't been contacted recently?"
 A: SELECT account_id, account_name, last_touch FROM v_accounts_summary WHERE last_touch < CURRENT_DATE - INTERVAL '30 days';
 
+Q: "Give me interaction history for Acme Corporation"
+A: SELECT activity_type, status, timestamp, contact_name, comment
+   FROM interactions WHERE account_name = 'Acme Corporation' ORDER BY timestamp DESC;
+
+Q: "Rank accounts by propensity to buy"
+A: SELECT account, sector, revenue, propensity_to_buy FROM accounts ORDER BY propensity_to_buy DESC LIMIT 10;
+
 CRITICAL: When querying the 'accounts' table, the company name column is 'account' NOT 'account_name'.
+CRITICAL: In the 'interactions' table the company name column is 'account_name'.
     """
