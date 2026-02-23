@@ -1,6 +1,15 @@
 import sys
 from pathlib import Path
+
+# Allow running from project root: streamlit run text_to_sql_app.py
 sys.path.append(str(Path(__file__).parent))
+
+# Load .env file if present (OPENAI_API_KEY, etc.)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass  # python-dotenv not installed; rely on environment variables
 
 import streamlit as st
 from agent import (
@@ -10,6 +19,7 @@ from agent import (
     Tool,
     register_tool
 )
+from agent.recommend import recommend_contacts_handler
 from database import db_query
 
 
@@ -59,6 +69,31 @@ register_tool(Tool(
     handler=open_work_handler
 ))
 
+# Register the recommend_contacts tool
+register_tool(Tool(
+    name="recommend_contacts",
+    description=(
+        "Recommend which accounts to contact next using a scoring model. "
+        "Scores each account on propensity to buy (40%), revenue (20%), and days since last "
+        "contact (40%). Use this for questions like 'who should I call?', 'I have free time, "
+        "who should I reach out to?', or 'give me 3 contact recommendations'."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "n": {
+                "type": "integer",
+                "description": "Number of recommendations to return (default: 3)"
+            },
+            "sector": {
+                "type": "string",
+                "description": "Optional: filter recommendations to a specific industry sector"
+            }
+        }
+    },
+    handler=recommend_contacts_handler
+))
+
 
 # Streamlit UI
 st.set_page_config(page_title='Sales Chatbot', layout='centered')
@@ -67,23 +102,23 @@ st.title('Sales Data Chatbot')
 # Sidebar with user context
 with st.sidebar:
     st.header("User Context")
-    
+
     agents = get_sales_agents()
-    
+
     if "current_user" not in st.session_state:
         st.session_state.current_user = agents[0] if agents else "Unknown"
-    
+
     selected_agent = st.selectbox(
         "Acting as:",
         options=agents,
         index=agents.index(st.session_state.current_user) if st.session_state.current_user in agents else 0
     )
-    
+
     st.session_state.current_user = selected_agent
     st.success(f"✓ Logged in as: {selected_agent}")
-    
+
     st.divider()
-    
+
     st.header("How it works")
     st.markdown("""
     1. Ask a question in plain English
@@ -91,7 +126,7 @@ with st.sidebar:
     3. Query executes with your context
     4. Results displayed in chat
     """)
-    
+
     st.divider()
     st.caption("Tables available:")
     st.code("accounts, interactions, products, sales_pipeline, sales_teams")
@@ -117,7 +152,7 @@ if user_question:
     st.session_state.messages.append({"role": "user", "content": user_question})
     with st.chat_message("user"):
         st.markdown(user_question)
-    
+
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             reply = agent_answer(user_question)
