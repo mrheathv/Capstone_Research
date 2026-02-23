@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-# Allow running from project root: streamlit run text_to_sql_app.py
+# Run from project root: streamlit run text_to_sql_app.py
 sys.path.append(str(Path(__file__).parent))
 
 # Load .env file if present (OPENAI_API_KEY, etc.)
