@@ -37,7 +37,7 @@ The application uses OpenAI's API. You'll need to:
 ## Launching the App
 Once setup is complete and your virtual environment is activated:
 ```bash
-streamlit run app/text_to_sql_app.py
+streamlit run text_to_sql_app.py
 ```
 The app will open in your browser at `http://localhost:8501`
 ## Project Structure
