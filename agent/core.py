@@ -8,15 +8,16 @@ def get_openai_client():
     """Initialize and return an OpenAI client"""
     return OpenAI()
 
-def agent_answer(user_question: str, max_iterations: int = 5) -> str:
+def agent_answer(user_question: str, max_iterations: int = 5, current_user: str = None) -> str:
     """
     Agent that uses ReAct pattern to answer questions with multiple tools.
-    
+
     Args:
         user_question: The user's natural language question
         tools_registry: Dictionary of available tools {name: Tool}
         max_iterations: Maximum number of reasoning loops (safety limit)
-        
+        current_user: Override the current sales agent (falls back to session state)
+
     Returns:
         Final synthesized answer as a string
     """
@@ -25,7 +26,7 @@ def agent_answer(user_question: str, max_iterations: int = 5) -> str:
     # Convert tools to OpenAI format
     tools_for_openai = get_tools_for_openai()
 
-    current_user = st.session_state.get('current_user', 'Unknown')
+    current_user = current_user or st.session_state.get('current_user', 'Unknown')
 
     system_message = f"""You are a helpful sales assistant with access to a CRM database.
 
