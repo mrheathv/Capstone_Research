@@ -217,3 +217,193 @@ with st.expander("View scoring SQL query"):
         "The three component scores are summed to produce the final 0–100 contact score."
     )
     st.code(SCORING_SQL.strip(), language="sql")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AIDA FUNNEL
+# ══════════════════════════════════════════════════════════════════════════════
+st.divider()
+st.subheader("Sales Funnel (AIDA)")
+st.markdown(
+    "Classifies each sales agent's accounts into the four AIDA stages based on "
+    "pipeline deal stage and interaction history."
+)
+
+with st.expander("How stages are defined"):
+    st.markdown("""
+| Stage | Condition |
+|---|---|
+| **Action** | Agent has a **Won** deal with this account |
+| **Desire** | Agent has an active **Engaging** deal (no Won) |
+| **Interest** | Agent has a **Prospecting** deal **and** ≥ 1 recorded interaction |
+| **Awareness** | Agent has a Prospecting deal but 0 interactions, or only Lost deals |
+
+Each account is placed in the highest stage the agent has reached with it.
+""")
+
+AIDA_SQL = """
+WITH agent_accounts AS (
+    SELECT
+        sp.sales_agent,
+        sp.account_id,
+        MAX(CASE WHEN sp.deal_stage = 'Won'         THEN 3
+                 WHEN sp.deal_stage = 'Engaging'    THEN 2
+                 WHEN sp.deal_stage = 'Prospecting' THEN 1
+                 ELSE 0 END)        AS best_stage_rank,
+        COUNT(DISTINCT i.timestamp) AS interaction_count
+    FROM sales_pipeline sp
+    LEFT JOIN interactions i ON sp.account_id = i.account_id
+    GROUP BY sp.sales_agent, sp.account_id
+),
+aida AS (
+    SELECT
+        sales_agent,
+        account_id,
+        CASE
+            WHEN best_stage_rank = 3                             THEN 'Action'
+            WHEN best_stage_rank = 2                             THEN 'Desire'
+            WHEN best_stage_rank = 1 AND interaction_count > 0  THEN 'Interest'
+            ELSE                                                      'Awareness'
+        END AS aida_stage
+    FROM agent_accounts
+)
+SELECT
+    sales_agent,
+    COUNT(CASE WHEN aida_stage = 'Awareness' THEN 1 END) AS awareness,
+    COUNT(CASE WHEN aida_stage = 'Interest'  THEN 1 END) AS interest,
+    COUNT(CASE WHEN aida_stage = 'Desire'    THEN 1 END) AS desire,
+    COUNT(CASE WHEN aida_stage = 'Action'    THEN 1 END) AS action,
+    COUNT(*)                                              AS total
+FROM aida
+GROUP BY sales_agent
+ORDER BY sales_agent
+"""
+
+AIDA_DRILLDOWN_SQL = """
+WITH agent_accounts AS (
+    SELECT
+        sp.sales_agent,
+        sp.account_id,
+        a.account,
+        a.sector,
+        MAX(CASE WHEN sp.deal_stage = 'Won'         THEN 3
+                 WHEN sp.deal_stage = 'Engaging'    THEN 2
+                 WHEN sp.deal_stage = 'Prospecting' THEN 1
+                 ELSE 0 END)        AS best_stage_rank,
+        COUNT(DISTINCT i.timestamp) AS interaction_count
+    FROM sales_pipeline sp
+    JOIN accounts a ON sp.account_id = a.account_id
+    LEFT JOIN interactions i ON sp.account_id = i.account_id
+    GROUP BY sp.sales_agent, sp.account_id, a.account, a.sector
+)
+SELECT
+    sales_agent,
+    account,
+    sector,
+    CASE
+        WHEN best_stage_rank = 3                             THEN 'Action'
+        WHEN best_stage_rank = 2                             THEN 'Desire'
+        WHEN best_stage_rank = 1 AND interaction_count > 0  THEN 'Interest'
+        ELSE                                                      'Awareness'
+    END AS aida_stage,
+    interaction_count
+FROM agent_accounts
+ORDER BY sales_agent, aida_stage, account
+"""
+
+try:
+    aida_df        = db_query(AIDA_SQL)
+    aida_detail_df = db_query(AIDA_DRILLDOWN_SQL)
+except Exception as e:
+    st.error(f"AIDA query error: {e}")
+    st.stop()
+
+# ── Agent selector ────────────────────────────────────────────────────────────
+all_agents = sorted(aida_df["sales_agent"].tolist())
+agent_options = ["All agents"] + all_agents
+selected_agent = st.selectbox("Select a sales agent", agent_options, key="aida_agent")
+
+# ── Metric cards ──────────────────────────────────────────────────────────────
+if selected_agent == "All agents":
+    row = aida_df[["awareness", "interest", "desire", "action"]].sum()
+else:
+    mask = aida_df["sales_agent"] == selected_agent
+    row = aida_df[mask][["awareness", "interest", "desire", "action"]].iloc[0] \
+        if mask.any() else {"awareness": 0, "interest": 0, "desire": 0, "action": 0}
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Awareness", int(row["awareness"]), help="Prospecting stage, no interactions yet")
+m2.metric("Interest",  int(row["interest"]),  help="Prospecting stage with ≥1 interaction")
+m3.metric("Desire",    int(row["desire"]),    help="Active Engaging deal")
+m4.metric("Action",    int(row["action"]),    help="Won deal")
+
+st.caption(
+    "Interactions are logged at the account level, not per sales agent. "
+    "When multiple reps work the same account, each sees that account's interactions counted."
+)
+
+# ── Stacked bar chart ─────────────────────────────────────────────────────────
+try:
+    chart_source = aida_df if selected_agent == "All agents" \
+        else aida_df[aida_df["sales_agent"] == selected_agent]
+
+    chart_df = chart_source[
+        ["sales_agent", "awareness", "interest", "desire", "action"]
+    ].melt(id_vars="sales_agent", var_name="Stage", value_name="Accounts")
+    chart_df["Stage"] = chart_df["Stage"].str.capitalize()
+
+    stage_order  = ["Awareness", "Interest", "Desire", "Action"]
+    agent_order  = chart_source.sort_values("action", ascending=False)["sales_agent"].tolist()
+
+    aida_chart = (
+        alt.Chart(chart_df)
+        .mark_bar()
+        .encode(
+            x=alt.X("sum(Accounts):Q", title="Accounts"),
+            y=alt.Y("sales_agent:N", sort=agent_order, title=None),
+            color=alt.Color(
+                "Stage:N",
+                sort=stage_order,
+                scale=alt.Scale(
+                    domain=stage_order,
+                    range=["#94A3B8", "#60A5FA", "#F59E0B", "#22C55E"],
+                ),
+                legend=alt.Legend(orient="bottom"),
+            ),
+            order=alt.Order("Stage:N", sort="ascending"),
+            tooltip=["sales_agent:N", "Stage:N", "Accounts:Q"],
+        )
+        .properties(height=max(200, len(chart_source) * 28))
+    )
+    st.altair_chart(aida_chart, use_container_width=True)
+
+except ImportError:
+    chart_source = aida_df if selected_agent == "All agents" \
+        else aida_df[aida_df["sales_agent"] == selected_agent]
+    st.bar_chart(chart_source.set_index("sales_agent")[["awareness", "interest", "desire", "action"]])
+
+# ── Drilldown table ───────────────────────────────────────────────────────────
+st.markdown("#### Account Drilldown")
+
+stage_filter = st.selectbox(
+    "Filter by AIDA stage",
+    ["All stages", "Awareness", "Interest", "Desire", "Action"],
+    key="aida_stage_filter",
+)
+
+drilldown = aida_detail_df.copy()
+if selected_agent != "All agents":
+    drilldown = drilldown[drilldown["sales_agent"] == selected_agent]
+if stage_filter != "All stages":
+    drilldown = drilldown[drilldown["aida_stage"] == stage_filter]
+
+st.dataframe(
+    drilldown.rename(columns={
+        "sales_agent":       "Agent",
+        "account":           "Account",
+        "sector":            "Sector",
+        "aida_stage":        "AIDA Stage",
+        "interaction_count": "Interactions",
+    }),
+    use_container_width=True,
+    hide_index=True,
+)
