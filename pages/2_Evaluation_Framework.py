@@ -122,75 +122,112 @@ st.divider()
 # ══════════════════════════════════════════════════════════════════════════════
 st.subheader("Golden Test Set")
 
-golden = st.session_state.get("golden_set_edited") or load_golden_set()
+# Edits are stored per-case keyed by ID so reloading the page doesn't wipe
+# unrelated cases. get_working_golden() merges original + any saved edits.
+def get_working_golden():
+    base  = load_golden_set()
+    edits = st.session_state.get("golden_edits", {})
+    return [edits.get(c["id"], c) for c in base]
 
-golden_rows = [
+golden = get_working_golden()
+edits_count = len(st.session_state.get("golden_edits", {}))
+
+grp_counts = {}
+for c in golden:
+    grp_counts[c.get("eval_group", "Conversational")] = grp_counts.get(c.get("eval_group", "Conversational"), 0) + 1
+
+caption = f"{len(golden)} test cases — " + "  ·  ".join(f"**{g}** {grp_counts.get(g, 0)}" for g in EVAL_GROUPS)
+if edits_count:
+    caption += f"  ·  ✏️ {edits_count} edited"
+st.caption(caption)
+
+# ── Overview table ────────────────────────────────────────────────────────────
+overview_group = st.selectbox("Filter overview by group", ["All"] + EVAL_GROUPS, key="overview_group")
+edited_ids = set(st.session_state.get("golden_edits", {}).keys())
+
+overview_rows = [
     {
-        "ID":          c["id"],
-        "Group":       c.get("eval_group", "Conversational"),
-        "Category":    c.get("category", ""),
-        "Priority":    c.get("priority", "Medium"),
-        "Sales Agent": c.get("sales_agent", "Anna Snelling"),
-        "Question":    c["question"],
+        "ID":       c["id"] + (" ✏️" if c["id"] in edited_ids else ""),
+        "Group":    c.get("eval_group", ""),
+        "Category": c.get("category", ""),
+        "Priority": c.get("priority", ""),
+        "Question": c["question"],
     }
     for c in golden
+    if overview_group == "All" or c.get("eval_group") == overview_group
 ]
-golden_df = pd.DataFrame(golden_rows)
+st.dataframe(pd.DataFrame(overview_rows), use_container_width=True, hide_index=True)
 
-grp_counts = golden_df["Group"].value_counts()
-st.caption(
-    f"{len(golden)} test cases — " +
-    "  ·  ".join(f"**{g}** {grp_counts.get(g, 0)}" for g in EVAL_GROUPS)
+# ── Per-case editor ───────────────────────────────────────────────────────────
+st.markdown("**Edit a test case**")
+
+case_options = [f"{c['id']} — {c['question'][:70]}{'…' if len(c['question']) > 70 else ''}" for c in golden]
+case_ids     = [c["id"] for c in golden]
+
+selected_label = st.selectbox("Select test case", case_options, key="edit_case_select")
+selected_idx   = case_options.index(selected_label)
+selected_case  = golden[selected_idx]
+
+with st.form("case_edit_form"):
+    fc1, fc2, fc3 = st.columns([1, 1, 1])
+    new_group    = fc1.selectbox("Eval Group",  EVAL_GROUPS,                        index=EVAL_GROUPS.index(selected_case.get("eval_group", "Conversational")))
+    new_category = fc2.selectbox("Category",    ALL_CATEGORIES,                     index=ALL_CATEGORIES.index(selected_case.get("category", "general")) if selected_case.get("category") in ALL_CATEGORIES else 0)
+    new_priority = fc3.selectbox("Priority",    ["High", "Medium", "Low"],          index=["High","Medium","Low"].index(selected_case.get("priority", "Medium")))
+
+    new_agent    = st.text_input("Sales Agent", value=selected_case.get("sales_agent", "Anna Snelling"))
+    new_question = st.text_area("Question",     value=selected_case["question"], height=80)
+    new_expected = st.text_area("Expected Elements",
+                                value=selected_case.get("expected_elements") or "",
+                                height=70,
+                                help="What the ideal response should contain (used as judge context).")
+
+    # Gold SQL — shown for all groups but prominent for SQL
+    sql_label = "Gold SQL" if selected_case.get("eval_group") == "SQL" else "Gold SQL (optional)"
+    new_sql = st.text_area(
+        sql_label,
+        value=selected_case.get("gold_sql") or "",
+        height=160,
+        help="Reference SQL query. Shown to the LLM judge as the expected answer for SQL tests.",
+    )
+
+    sc1, sc2 = st.columns([1, 3])
+    saved   = sc1.form_submit_button("Save changes", type="primary")
+    discard = sc2.form_submit_button("Discard edits for this case")
+
+if saved:
+    updated_case = {
+        **selected_case,
+        "eval_group":        new_group,
+        "category":          new_category,
+        "priority":          new_priority,
+        "sales_agent":       new_agent,
+        "question":          new_question,
+        "expected_elements": new_expected or None,
+        "gold_sql":          new_sql.strip() or None,
+        "expected_criteria": [new_expected] if new_expected else [],
+    }
+    edits = st.session_state.get("golden_edits", {})
+    edits[selected_case["id"]] = updated_case
+    st.session_state["golden_edits"] = edits
+    st.success(f"Saved edits for **{selected_case['id']}**.")
+
+if discard:
+    edits = st.session_state.get("golden_edits", {})
+    edits.pop(selected_case["id"], None)
+    st.session_state["golden_edits"] = edits
+    st.rerun()
+
+# ── Download / reset all ──────────────────────────────────────────────────────
+dl_col, reset_col = st.columns([1, 1])
+dl_col.download_button(
+    "Download full set as JSON",
+    data=json.dumps(get_working_golden(), indent=2),
+    file_name="golden_set_edited.json",
+    mime="application/json",
 )
-
-edit_mode = st.toggle("Edit test cases", value=False, key="golden_edit_toggle")
-
-if not edit_mode:
-    st.dataframe(golden_df, use_container_width=True, hide_index=True)
-else:
-    st.info("Add, edit, or remove rows. Click **Apply** to use in the next evaluation run.")
-    edited = st.data_editor(
-        golden_df,
-        num_rows="dynamic",
-        column_config={
-            "ID":          st.column_config.TextColumn("ID"),
-            "Group":       st.column_config.SelectboxColumn("Group", options=EVAL_GROUPS),
-            "Category":    st.column_config.SelectboxColumn("Category", options=ALL_CATEGORIES),
-            "Priority":    st.column_config.SelectboxColumn("Priority", options=["High", "Medium", "Low"]),
-            "Sales Agent": st.column_config.TextColumn("Sales Agent"),
-            "Question":    st.column_config.TextColumn("Question", width="large"),
-        },
-        use_container_width=True,
-        hide_index=True,
-        key="golden_editor",
-    )
-    c1, c2, c3 = st.columns([1, 1, 2])
-    if c1.button("Apply", type="primary"):
-        updated = [
-            {
-                "id":                str(row.get("ID", "")),
-                "eval_group":        str(row.get("Group", "Conversational")),
-                "category":          str(row.get("Category", "general")),
-                "priority":          str(row.get("Priority", "Medium")),
-                "sales_agent":       str(row.get("Sales Agent", "Anna Snelling")),
-                "question":          str(row.get("Question", "")),
-                "gold_sql":          None,
-                "expected_elements": None,
-                "expected_criteria": [],
-            }
-            for _, row in edited.iterrows()
-        ]
-        st.session_state["golden_set_edited"] = updated
-        st.success(f"Applied — {len(updated)} cases will be used in the next run.")
-    c2.download_button(
-        "Download JSON",
-        data=json.dumps(st.session_state.get("golden_set_edited", golden_rows), indent=2),
-        file_name="golden_set_edited.json",
-        mime="application/json",
-    )
-    if "golden_set_edited" in st.session_state and c3.button("Reset to original"):
-        del st.session_state["golden_set_edited"]
-        st.rerun()
+if edits_count and reset_col.button("Reset all edits"):
+    st.session_state.pop("golden_edits", None)
+    st.rerun()
 
 st.divider()
 
@@ -205,7 +242,7 @@ if not EVAL_AVAILABLE:
         "Ensure `OPENAI_API_KEY` is set and all dependencies are installed."
     )
 else:
-    active_golden = st.session_state.get("golden_set_edited") or load_golden_set()
+    active_golden = get_working_golden()
 
     c1, c2, c3 = st.columns([1, 1, 1])
     run_group = c1.selectbox("Eval group", ["All"] + EVAL_GROUPS, key="run_group")
